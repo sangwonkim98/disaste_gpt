@@ -1,0 +1,94 @@
+
+        <html>
+        <head>
+            <meta charset="utf-8">
+            <style>
+                body { font-family: 'Hangeul', 'Malgun Gothic', sans-serif; font-size: 11pt; line-height: 1.6; }
+                h1 { text-align: center; font-size: 20pt; }
+                h2 { font-size: 14pt; border-bottom: 2px solid black; margin-top: 20px; }
+                h3 { font-size: 12pt; margin-top: 15px; }
+                table { width: 100%; border-collapse: collapse; margin-bottom: 10px; }
+                th, td { border: 1px solid black; padding: 5px; }
+                .meta { text-align: right; margin-bottom: 30px; }
+                ul { margin: 5px 0; padding-left: 20px; }
+            </style>
+        </head>
+        <body>
+            <h1>국민 안전관리 일일상황</h1>
+            <div class="meta">2026. 1. 7.(수) 22:00 기준</div>
+            
+            <h2>1. 기상 상황</h2>
+            <ul>
+                <li><b>기상 현황:</b> 전국 맑음</li>
+                <li><b>기온 정보:</b> (오늘) 서울 -6도 ~ 4도, (내일) 서울 -4도 ~ 5도</li>
+                <li><b>기상 전망:</b> 오늘 전국 대체로 맑으나 내일 구름많음</li>
+                <li><b>기상 특보:</b> 한파주의보(경기북부, 강원내륙), 건조주의보(강원동해안, 경상권해안)</li>
+            </ul>
+            
+            <h2>2. 주요 재난안전 관리상황</h2>
+            
+            <p style="color: blue; font-weight: bold;">◆ [기온] 경기북부·강원내륙 영하 10도 이하, 건강관리 유의</p>
+            
+            <table>
+                <colgroup>
+                    <col width="20%">
+                    <col width="80%">
+                </colgroup>
+                <thead>
+                    <tr>
+                        <th style="background-color: #e0e0e0;">구 분</th>
+                        <th style="background-color: #e0e0e0;">주 요 내 용</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">한파</td>
+                <td style="text-align: left;">중부내륙 중심 아침 기온 영하 10도 내외</td>
+            </tr>
+            
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">강설</td>
+                <td style="text-align: left;">특이사항 없음</td>
+            </tr>
+            
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">빙판길</td>
+                <td style="text-align: left;">이면도로 결빙 주의</td>
+            </tr>
+            
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">건조</td>
+                <td style="text-align: left;">강원영동 대기 매우 건조</td>
+            </tr>
+            
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">강풍</td>
+                <td style="text-align: left;">해안가 약간 강한 바람</td>
+            </tr>
+            
+            <tr>
+                <td style="text-align: center; background-color: #f5f5f5; font-weight: bold;">해상</td>
+                <td style="text-align: left;">동해중부먼바다 물결 높음</td>
+            </tr>
+            
+                </tbody>
+            </table>
+            
+            <h3>□ 대처 상황</h3>
+            <ul>
+                <li><b>피해 현황:</b> 인명피해 1명 발생</li>
+                <li><b>통제 상황:</b> 고속도로 일부 구간 통제 중</li>
+            </ul>
+            <h4>주요 조치사항</h4>
+            <ul>
+                <li>(행안부) 한파 취약계층 안부 확인</li><li>(소방청) 다중이용시설 화재 예방 점검</li>
+            </ul>
+            
+            <h3>□ 주요 사고</h3>
+            <ul>
+                <li><b>[교통사고]</b> (교통사고) 17:31경 울산 북구 31번 국도에서 승용차 4중 추돌, 5명 부상</li><li><b>[화재]</b> (화재) 21:30경 경기 하남시 감북동 다세대주택에서 화재 발생, 70대 여성 사망 및 3명 연기흡입</li><li><b>[화재]</b> (화재) 14:19경 경기 하남시 감북동 세종포천고속도로 초이IC 부근 SUV 화재, 운전자 대피</li><li><b>[화재]</b> (화재) 13:42경 제주 비닐하우스 창고에서 화재 발생, 비닐하우스 96㎡ 소실 및 인접 주택 일부 수열 피해</li>
+            </ul>
+        </body>
+        </html>
+        

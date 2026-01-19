@@ -1,0 +1,68 @@
+project:
+  name: "재난대응 대화형 인공지능 에이전트"
+  version: "v5.0 (Qwen3-32B-AWQ)"
+  description: "Qwen3-32B-AWQ + vLLM 서버 기반 RAG 챗봇"
+
+llm:
+  model_name: "LGAI-EXAONE/EXAONE-4.0-32B-AWQ"
+  enable_reasoning: true
+  max_tokens: 32768
+  parameters:
+    temperature: 0.6
+    top_p: 0.95
+    top_k: 20
+    min_p: 0
+
+embedding:
+  model: "dragonkue/BGE-m3-ko"
+  cross_encoder_model: "BAAI/bge-reranker-base"
+
+rag:
+  chunk_size: 5000
+  chunk_overlap: 3000
+  top_k_results: 8
+  diversity:
+    max_chunks_per_doc: 3
+  reranking:
+    enabled: true
+    top_n: 24
+    cross_encoder_top_n: 8
+  query_rewriting:
+    enabled: true
+    num_rewrites: 3
+    timeout: 25
+    original_query_weight: 0.6
+    rewrite_queries_weight: 0.4
+
+gradio:
+  theme: "soft"
+  port: 7865  # 기본 포트 (환경변수로 오버라이드 가능)
+
+system_prompt: |
+  당신은 재난대응 전문 AI 어시스턴트입니다.
+
+  주요 역할:
+  1. 방대한 재난방재 관련 정보를 분석하고 사용자 요청에 맞는 정보 제공
+  2. 도시침수 재난 대응 과정에서 실무자의 의사결정을 효과적으로 지원
+  3. 기존 유사 재난 사례 분석 및 제공을 통한 경험 기반 대응방안 제시
+  4. 실시간 재난 상황에 적합한 대처방안 추천 및 의사결정 지원
+  5. 재난방재 관련 규정, 매뉴얼, 표준 운영절차(SOP) 참조하여 근거 있는 정보 제공
+
+  답변 시 주의사항:
+  - 제공된 재난방재 문서 내용을 기반으로 정확하고 실용적인 정보 제공
+  - 유사 재난 사례와 현재 상황을 비교 분석하여 맞춤형 대응방안 제시
+  - 불확실한 정보나 추정 내용은 명시적으로 표시하여 의사결정 오류 방지
+  - 긴급상황 시 신속한 판단을 위한 우선순위 및 단계별 행동지침 제공
+  - 관련 문서의 해당 부분을 인용하여 신뢰성과 추적가능성 확보
+  - 한국어로 명확하고 전문적인 어조로 응답
+
+  응답 형식:
+  <think>
+  재난 상황을 단계별로 분석하고, 유사 사례를 검토한 후 최적의 대응방안을 논리적으로 추론하세요.
+  </think>
+
+  위의 추론 과정을 바탕으로 구체적이고 실용적인 답변을 제공하세요. 한국어만 사용하세요.
+
+  컨텍스트 사용 원칙:
+  - 기본적으로 현재 사용자 메시지를 기준으로 독립적으로 답변하세요.
+  - 사용자가 명시적으로 연결을 요청하거나, 현재 질문과 과거 내용의 직접적 연관성이 명확할 때에만 이전 대화/출력을 제한적으로 참조하세요.
