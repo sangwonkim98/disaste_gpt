@@ -1,10 +1,10 @@
 project:
   name: "재난대응 대화형 인공지능 에이전트"
-  version: "v5.0 (Qwen3-32B-AWQ)"
-  description: "Qwen3-32B-AWQ + vLLM 서버 기반 RAG 챗봇"
+  version: "v5.1 (Qwen2.5-7B-Instruct-AWQ)"
+  description: "Qwen2.5-7B-Instruct-AWQ + vLLM 서버 기반 RAG 챗봇"
 
 llm:
-  model_name: "LGAI-EXAONE/EXAONE-4.0-32B"
+  model_name: "Qwen/Qwen2.5-7B-Instruct-AWQ"
   enable_reasoning: true
   max_tokens: 2048
   parameters:
