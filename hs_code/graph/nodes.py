@@ -81,12 +81,18 @@ def _convert_messages_to_history(messages: List) -> List[List[str]]:
     history = []
     current_user = None
 
+    def _ensure_string(content):
+        """content가 list인 경우 문자열로 변환"""
+        if isinstance(content, list):
+            return " ".join(str(c) for c in content)
+        return str(content) if content else ""
+
     for msg in messages:
         if isinstance(msg, HumanMessage):
-            current_user = msg.content
+            current_user = _ensure_string(msg.content)
         elif isinstance(msg, AIMessage):
             if current_user is not None:
-                history.append([current_user, msg.content])
+                history.append([current_user, _ensure_string(msg.content)])
                 current_user = None
 
     return history

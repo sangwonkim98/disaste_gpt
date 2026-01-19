@@ -82,7 +82,7 @@ DESCRIPTION = get_conf("project.description", "")
 # 모델 설정
 # ================================
 # vLLM 서버 설정
-VLLM_SERVER_URL = os.getenv("VLLM_SERVER_URL", "http://0.0.0.0:8010")
+VLLM_SERVER_URL = os.getenv("VLLM_SERVER_URL", "http://localhost:8010/v1")
 VLLM_API_KEY = os.getenv("VLLM_API_KEY", "EMPTY")
 
 # LLM 설정
@@ -99,8 +99,8 @@ MIN_P = float(get_conf("llm.parameters.min_p", 0, "MIN_P"))
 
 # 임베딩 모델
 EMBEDDING_MODEL = get_conf("embedding.model", "dragonkue/BGE-m3-ko")
-# 임베딩 디바이스 (GPU 2번 사용 - vLLM은 GPU 0,1 사용)
-EMBEDDING_DEVICE = get_conf("embedding.device", "cuda:2", "EMBEDDING_DEVICE")
+# 임베딩 디바이스 (GPU 메모리 부족 시 CPU 사용)
+EMBEDDING_DEVICE = get_conf("embedding.device", "cpu", "EMBEDDING_DEVICE")
 
 # ================================
 # RAG 설정

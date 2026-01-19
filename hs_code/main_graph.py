@@ -175,6 +175,10 @@ class LangGraphGradioApp:
                 for node_name, node_output in event.items():
                     logger.info(f"📍 노드 실행: {node_name}")
 
+                    # node_output이 None인 경우 스킵
+                    if not node_output:
+                        continue
+
                     # 참조 문서 정보 업데이트
                     if node_output.get("reference_docs"):
                         doc_info = node_output["reference_docs"]

@@ -11,8 +11,8 @@ pip install -q pyyaml python-dotenv gradio langchain-community
 
 # Python 경로 설정 (현재 디렉토리를 모듈 경로에 추가)
 export PYTHONPATH=$PYTHONPATH:$(pwd)
-# vLLM이 GPU를 사용하므로, 애플리케이션 로직은 충돌 방지를 위해 CPU 모드로 실행 (config.yaml device: cpu 설정 준수)
-export CUDA_VISIBLE_DEVICES=""
+# vLLM과 함께 GPU 사용 (메모리 여유 공간 활용)
+export CUDA_VISIBLE_DEVICES=0
 
 # 애플리케이션 실행
 echo "🚀 Starting Application (LangGraph Mode)..."

@@ -15,7 +15,7 @@ llm:
 
 embedding:
   model: "dragonkue/BGE-m3-ko"
-  device: "cpu"
+  device: "cpu"  # GPU 메모리 부족으로 CPU 사용
   cross_encoder_model: "BAAI/bge-reranker-base"
 
 rag:

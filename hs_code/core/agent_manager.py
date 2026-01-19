@@ -130,7 +130,8 @@ class ExaoneAgentManager:
             if history:
                 for human_msg, ai_msg in history[-2:]:
                     messages.append({"role": "user", "content": human_msg})
-                    if ai_msg and ai_msg.strip():
+                    # ai_msg가 문자열인 경우에만 strip() 호출
+                    if ai_msg and isinstance(ai_msg, str) and ai_msg.strip():
                         messages.append({"role": "assistant", "content": ai_msg})
             
             # 현재 사용자 메시지
