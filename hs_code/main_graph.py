@@ -18,6 +18,8 @@ from config import (
     PDF_FILES, ensure_directories, VLLM_SERVER_URL
 )
 from graph import build_graph, GraphState
+from graph.query_builder import build_query_graph
+from graph.query_state import QueryState
 from graph.nodes import _get_rag_system
 from utils.pdf_handler import PDFUtils, TempFileManager
 from services.ocr_service import OCRProcessor
@@ -33,9 +35,13 @@ class LangGraphGradioApp:
         # 1. 초기화: 시스템 구동에 필요한 핵심 모듈들을 로드합니다.
         ensure_directories()
 
-        # [LangGraph] 그래프 빌드
+        # [LangGraph] 기존 그래프 빌드
         logger.info("🔨 LangGraph 그래프 초기화 중...")
         self.graph = build_graph()
+
+        # [LangGraph v2] Query Pipeline 그래프 빌드
+        logger.info("🔨 Query Pipeline 그래프 초기화 중...")
+        self.query_graph = build_query_graph()
 
         # [Eyes] PDF/OCR 처리기
         self.pdf_utils = PDFUtils()
@@ -210,6 +216,117 @@ class LangGraphGradioApp:
             new_history[-1]['content'] = error_response
             yield new_history, "", ""
 
+    def process_with_query_pipeline(
+        self,
+        user_message: str,
+        history: List[Dict[str, str]],
+        reasoning_mode: bool,
+        selected_pdf: str,
+        uploaded_context: str = "",
+        debug_mode: bool = False
+    ) -> Generator[Tuple[List[Dict[str, str]], str, str], None, None]:
+        """
+        Query Pipeline을 사용하여 메시지 처리 (개선된 파이프라인)
+
+        Args:
+            user_message: 사용자 메시지
+            history: 대화 히스토리
+            reasoning_mode: 추론 모드 활성화 여부
+            selected_pdf: 선택된 PDF 경로
+            uploaded_context: 업로드된 파일 내용
+            debug_mode: 디버그 모드 활성화 여부
+
+        Yields:
+            (updated_history, doc_info, thinking_content) 튜플
+        """
+        # 히스토리를 LangGraph 메시지 형식으로 변환
+        messages = []
+        if history:
+            for item in history:
+                role = item.get('role')
+                content = item.get('content')
+                if role == 'user':
+                    messages.append(HumanMessage(content=content))
+                elif role == 'assistant':
+                    messages.append(AIMessage(content=content))
+
+        # QueryState 초기 상태 구성
+        initial_state: QueryState = {
+            "messages": messages,
+            "user_input": user_message,
+            "uploaded_pdf_content": uploaded_context if uploaded_context else None,
+            "selected_manual": None if selected_pdf == "all" else selected_pdf,
+            "debug_mode": debug_mode,
+            "reasoning_mode": reasoning_mode,
+            "execution_plan": None,
+            "execution_result": None,
+            "final_response": "",
+            "next_node": "",
+        }
+
+        # 진행 중 표시
+        history_with_input = (history or []) + [{"role": "user", "content": user_message}]
+        new_history = history_with_input + [{"role": "assistant", "content": "🔄 Query Pipeline 처리 중..."}]
+        yield new_history, "", ""
+
+        try:
+            logger.info(f"🚀 Query Pipeline 실행 시작: {user_message[:50]}...")
+
+            doc_info = ""
+            thinking_content = ""
+            final_response = ""
+
+            # Query Pipeline 스트리밍 실행
+            for event in self.query_graph.stream(initial_state):
+                for node_name, node_output in event.items():
+                    logger.info(f"📍 [Query Pipeline] 노드 실행: {node_name}")
+
+                    if not node_output:
+                        continue
+
+                    # 실행 계획 정보 추출 (디버그용)
+                    if node_output.get("execution_plan"):
+                        plan = node_output["execution_plan"]
+                        plan_info = []
+                        if plan.get("need_tools"):
+                            plan_info.append(f"도구: {plan.get('tool_list', [])}")
+                        if plan.get("need_rag"):
+                            plan_info.append("RAG 검색")
+                        if plan.get("need_pdf"):
+                            plan_info.append("PDF 분석")
+                        if plan_info:
+                            thinking_content = f"**실행 계획:** {', '.join(plan_info)}\n**이유:** {plan.get('tool_reasoning', '')}"
+
+                    # 실행 결과에서 문서 정보 추출
+                    if node_output.get("execution_result"):
+                        result = node_output["execution_result"]
+                        if result.get("rag_results"):
+                            rag_docs = result["rag_results"]
+                            doc_info = "**📚 검색된 매뉴얼:**\n"
+                            for doc in rag_docs[:3]:
+                                if isinstance(doc, dict) and "content" in doc:
+                                    doc_info += f"- {doc.get('source', 'unknown')}: {doc['content'][:200]}...\n"
+
+                    # 최종 응답 업데이트
+                    if node_output.get("final_response"):
+                        final_response = node_output["final_response"]
+                        new_history[-1]['content'] = final_response
+                        yield new_history, doc_info, thinking_content
+
+            if not final_response:
+                final_response = "응답을 생성하지 못했습니다."
+                new_history[-1]['content'] = final_response
+
+            yield new_history, doc_info, thinking_content
+
+        except Exception as e:
+            logger.error(f"❌ Query Pipeline 실행 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            error_response = f"오류가 발생했습니다: {str(e)}"
+            new_history[-1]['content'] = error_response
+            yield new_history, "", ""
+
     def create_interface(self):
         """Gradio 인터페이스 생성"""
         with gr.Blocks(title=f"{PROJECT_NAME} {VERSION} (LangGraph)") as demo:
@@ -255,6 +372,7 @@ class LangGraphGradioApp:
                         reasoning_mode = gr.Checkbox(label="🧠 Reasoning 모드", value=True)
                         agent_mode = gr.Checkbox(label="🤖 Agent 모드 (도구 사용)", value=True)
                         enable_rag = gr.Checkbox(label="📚 문서 검색 (RAG)", value=True)
+                        query_pipeline_mode = gr.Checkbox(label="🔬 Query Pipeline v2", value=True, info="개선된 파이프라인 사용")
 
                     with gr.Row():
                         pdf_selector = gr.Dropdown(
@@ -302,7 +420,7 @@ class LangGraphGradioApp:
             uploaded_context_state = gr.State("")
 
             # --- 이벤트 핸들러 정의 ---
-            def user_input(user_message, history, reasoning_mode, agent_mode, enable_rag, selected_pdf, uploaded_context):
+            def user_input(user_message, history, reasoning_mode, agent_mode, enable_rag, selected_pdf, uploaded_context, use_query_pipeline):
                 """메시지 처리 핸들러"""
                 if not user_message:
                     yield history, "", "", "", gr.Button(interactive=True), ""
@@ -316,17 +434,31 @@ class LangGraphGradioApp:
                         selected_pdf_path = path
                         break
 
-                # LangGraph로 처리
-                for new_history, doc_info_content, thinking_content in self.process_with_graph(
-                    user_message,
-                    history or [],
-                    reasoning_mode,
-                    agent_mode,
-                    enable_rag,
-                    selected_pdf_path,
-                    uploaded_context
-                ):
-                    yield new_history, thinking_content, doc_info_content, "", gr.Button(interactive=False), ""
+                # Query Pipeline v2 사용
+                if use_query_pipeline:
+                    logger.info("🔬 Query Pipeline v2 모드로 처리")
+                    for new_history, doc_info_content, thinking_content in self.process_with_query_pipeline(
+                        user_message,
+                        history or [],
+                        reasoning_mode,
+                        selected_pdf_path,
+                        uploaded_context,
+                        debug_mode=False
+                    ):
+                        yield new_history, thinking_content, doc_info_content, "", gr.Button(interactive=False), ""
+                else:
+                    # 기존 LangGraph로 처리
+                    logger.info("🔧 기존 LangGraph 모드로 처리")
+                    for new_history, doc_info_content, thinking_content in self.process_with_graph(
+                        user_message,
+                        history or [],
+                        reasoning_mode,
+                        agent_mode,
+                        enable_rag,
+                        selected_pdf_path,
+                        uploaded_context
+                    ):
+                        yield new_history, thinking_content, doc_info_content, "", gr.Button(interactive=False), ""
 
                 yield new_history, thinking_content, doc_info_content, "", gr.Button(interactive=True), ""
 
@@ -397,7 +529,7 @@ class LangGraphGradioApp:
 
             submit.click(
                 user_input,
-                inputs=[msg, chatbot, reasoning_mode, agent_mode, enable_rag, pdf_selector, uploaded_context_state],
+                inputs=[msg, chatbot, reasoning_mode, agent_mode, enable_rag, pdf_selector, uploaded_context_state, query_pipeline_mode],
                 outputs=[chatbot, thinking_display, doc_info, msg, submit, uploaded_context_state],
                 api_name=False
             )
@@ -410,7 +542,7 @@ class LangGraphGradioApp:
 
             msg.submit(
                 user_input,
-                inputs=[msg, chatbot, reasoning_mode, agent_mode, enable_rag, pdf_selector, uploaded_context_state],
+                inputs=[msg, chatbot, reasoning_mode, agent_mode, enable_rag, pdf_selector, uploaded_context_state, query_pipeline_mode],
                 outputs=[chatbot, thinking_display, doc_info, msg, submit, uploaded_context_state],
                 api_name=False
             )
@@ -443,18 +575,16 @@ def print_startup_info():
     print(f"{'='*80}")
     print("✅ 주요 기능:")
     print("  1. ✅ LangGraph 기반 에이전트 그래프")
-    print("  2. ✅ EXAONE 4.0-32B-AWQ Reasoning 모델")
+    print("  2. ✅ Query Pipeline v2 (개선된 도구 선택)")
     print("  3. ✅ vLLM 서버 기반 고속 추론")
     print("  4. ✅ LangChain 기반 RAG 시스템")
     print("  5. ✅ FAISS 벡터 데이터베이스")
     print("  6. ✅ Mistral OCR + 자동 캐싱")
     print("  7. ✅ 실시간 스트리밍 응답")
     print(f"{'='*80}")
-    print("🔧 그래프 구조:")
-    print("  START → Agent ─┬─→ Tools → END")
-    print("                  ├─→ Retrieve → END")
-    print("                  ├─→ Report → END")
-    print("                  └─→ END")
+    print("🔧 Query Pipeline v2 구조:")
+    print("  START → Analyzer ─┬─→ Executor → Synthesizer → END")
+    print("                    └─→ Direct Response → END")
     print(f"{'='*80}")
 
 
