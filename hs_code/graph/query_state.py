@@ -59,8 +59,16 @@ class QueryState(TypedDict):
     # ===== Synthesizer 출력 =====
     final_response: str                      # 최종 응답
 
+    # ===== Analyzer 스트리밍 =====
+    ready_to_analyze: bool                   # Analyzer 스트리밍 준비 신호
+    analyzer_messages: List[Any]             # Analyzer LLM에 보낼 메시지
+
+    # ===== Synthesizer 스트리밍 =====
+    ready_to_generate: bool                  # 최종 응답 스트리밍 준비 신호
+    final_messages: List[Any]                # LLM에 보낼 최종 메시지 리스트
+
     # ===== 라우팅 =====
-    next_node: str                           # 다음 노드 ("executor" | "synthesizer" | "end")
+    next_node: str                           # 다음 노드 ("executor" | "direct_response" | "end")
 
 
 # ===== 도구 메타데이터 =====

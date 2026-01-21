@@ -16,5 +16,5 @@ export CUDA_VISIBLE_DEVICES=0
 
 # 애플리케이션 실행
 echo "🚀 Starting Application (LangGraph Mode)..."
-python hs_code/main_graph.py "$@" > run.log 2>&1 &
+python -u hs_code/main_graph.py "$@" > run.log 2>&1 &
 tail -f run.log

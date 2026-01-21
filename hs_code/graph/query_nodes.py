@@ -86,6 +86,15 @@ def _debug_log(state: QueryState, message: str, data: Any = None):
 ANALYZER_SYSTEM_PROMPT = """당신은 재난대응 AI 시스템의 'Query Analyzer'입니다.
 사용자의 질문을 분석하여 어떤 정보 소스가 필요한지 판단하세요.
 
+## 사고 방식
+반드시 <think> 태그 안에서 단계별로 분석한 후 JSON을 출력하세요.
+<think>
+1. 사용자가 무엇을 원하는가?
+2. 실시간 데이터가 필요한가? (날씨, 뉴스, 지진 등)
+3. 매뉴얼/절차 정보가 필요한가?
+4. 어떤 도구 조합이 최적인가?
+</think>
+
 ## 사용 가능한 정보 소스
 
 ### 1. 외부 API 도구 (tools)
@@ -213,15 +222,14 @@ def analyzer_node(state: QueryState) -> Dict[str, Any]:
     """
     사용자 입력을 분석하여 실행 계획을 수립합니다.
 
-    1. LLM으로 의도 분석 시도
-    2. 실패 시 규칙 기반 분석으로 fallback
-    3. 도구 의존성 체이닝 적용
+    스트리밍 지원: LLM 호출은 main_graph.py에서 처리
+    - analyzer_messages 준비
+    - ready_to_analyze: True 반환
     """
     logger.info("🔎 [ANALYZER] 실행 시작...")
 
     user_input = state.get("user_input", "")
     has_pdf = bool(state.get("uploaded_pdf_content"))
-    debug_mode = state.get("debug_mode", False)
 
     _debug_log(state, "입력", {"user_input": user_input, "has_pdf": has_pdf})
 
@@ -233,103 +241,84 @@ def analyzer_node(state: QueryState) -> Dict[str, Any]:
             "final_response": "질문을 입력해주세요."
         }
 
-    # LLM 기반 분석 시도
-    try:
-        client = _get_llm_client()
+    # 컨텍스트 구성
+    context = f"사용자 질문: {user_input}"
+    if has_pdf:
+        context += "\n[사용자가 PDF 파일을 업로드함]"
 
-        # 컨텍스트 구성
-        context = f"사용자 질문: {user_input}"
-        if has_pdf:
-            context += "\n[사용자가 PDF 파일을 업로드함]"
+    # Analyzer 메시지 준비 (LLM 호출은 main_graph.py에서)
+    analyzer_messages = [
+        {"role": "system", "content": ANALYZER_SYSTEM_PROMPT},
+        {"role": "user", "content": context}
+    ]
 
-        messages = [
-            {"role": "system", "content": ANALYZER_SYSTEM_PROMPT},
-            {"role": "user", "content": context}
-        ]
-
-        response = client.generate_response(
-            messages=messages,
-            temperature=0.0,
-            enable_thinking=False,
-            stream=False
-        )
-
-        if response and response.choices:
-            content = response.choices[0].message.content.strip()
-
-            # JSON 추출
-            if "```json" in content:
-                content = content.split("```json")[1].split("```")[0].strip()
-            elif "```" in content:
-                content = content.split("```")[1].split("```")[0].strip()
-
-            result = json.loads(content)
-
-            # ExecutionPlan 구성
-            plan = ExecutionPlan(
-                need_tools=result.get("need_tools", False),
-                need_rag=result.get("need_rag", False),
-                need_pdf=result.get("need_pdf", has_pdf),
-                tool_list=result.get("tool_list", []),
-                tool_params=result.get("tool_params", {}),
-                tool_reasoning=result.get("tool_reasoning", ""),
-                rag_query=result.get("rag_query"),
-                rag_reasoning=result.get("rag_reasoning"),
-                pdf_task=result.get("pdf_task"),
-                confidence=result.get("confidence", 0.8)
-            )
-
-            # 지역 파라미터 보완
-            location = _extract_location(user_input)
-            if location:
-                for tool in plan["tool_list"]:
-                    if TOOL_METADATA.get(tool, {}).get("requires_location"):
-                        if tool not in plan["tool_params"]:
-                            plan["tool_params"][tool] = {}
-                        if "location" not in plan["tool_params"][tool]:
-                            plan["tool_params"][tool]["location"] = location
-
-            # 도구 의존성 체이닝
-            for tool in list(plan["tool_list"]):
-                if tool in TOOL_DEPENDENCIES:
-                    dep = TOOL_DEPENDENCIES[tool]
-                    if dep.get("auto_chain"):
-                        for suggested in dep.get("suggests", []):
-                            if suggested not in plan["tool_list"]:
-                                plan["tool_list"].append(suggested)
-                                if TOOL_METADATA.get(suggested, {}).get("requires_location") and location:
-                                    plan["tool_params"][suggested] = {"location": location}
-
-            logger.info(f"✅ [ANALYZER] LLM 분석 완료: tools={plan['need_tools']}, rag={plan['need_rag']}, pdf={plan['need_pdf']}")
-            _debug_log(state, "실행 계획", plan)
-
-            # 다음 노드 결정
-            if plan["need_tools"] or plan["need_rag"] or plan["need_pdf"]:
-                next_node = "executor"
-            else:
-                next_node = "direct_response"
-
-            return {
-                "execution_plan": plan,
-                "next_node": next_node
-            }
-
-    except Exception as e:
-        logger.warning(f"⚠️ [ANALYZER] LLM 분석 실패, 규칙 기반으로 전환: {e}")
-
-    # Fallback: 규칙 기반 분석
-    plan = _rule_based_analysis(user_input, has_pdf)
-    logger.info(f"📋 [ANALYZER] 규칙 기반 분석 완료: tools={plan['need_tools']}, rag={plan['need_rag']}")
-
-    if plan["need_tools"] or plan["need_rag"] or plan["need_pdf"]:
-        next_node = "executor"
-    else:
-        next_node = "direct_response"
+    logger.info("📋 [ANALYZER] 메시지 준비 완료 → main으로 위임")
 
     return {
-        "execution_plan": plan,
-        "next_node": next_node
+        "ready_to_analyze": True,
+        "analyzer_messages": analyzer_messages,
+        "next_node": "analyzer_streaming"  # main에서 처리 후 다음 단계 결정
     }
+
+
+def parse_analyzer_response(content: str, user_input: str, has_pdf: bool) -> ExecutionPlan:
+    """
+    Analyzer LLM 응답을 파싱하여 ExecutionPlan 생성
+    (main_graph.py에서 호출)
+    """
+    try:
+        # thinking 태그 제거
+        clean_content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
+
+        # JSON 추출
+        if "```json" in clean_content:
+            clean_content = clean_content.split("```json")[1].split("```")[0].strip()
+        elif "```" in clean_content:
+            clean_content = clean_content.split("```")[1].split("```")[0].strip()
+
+        result = json.loads(clean_content)
+
+        # ExecutionPlan 구성
+        plan = ExecutionPlan(
+            need_tools=result.get("need_tools", False),
+            need_rag=result.get("need_rag", False),
+            need_pdf=result.get("need_pdf", has_pdf),
+            tool_list=result.get("tool_list", []),
+            tool_params=result.get("tool_params", {}),
+            tool_reasoning=result.get("tool_reasoning", ""),
+            rag_query=result.get("rag_query"),
+            rag_reasoning=result.get("rag_reasoning"),
+            pdf_task=result.get("pdf_task"),
+            confidence=result.get("confidence", 0.8)
+        )
+
+        # 지역 파라미터 보완
+        location = _extract_location(user_input)
+        if location:
+            for tool in plan["tool_list"]:
+                if TOOL_METADATA.get(tool, {}).get("requires_location"):
+                    if tool not in plan["tool_params"]:
+                        plan["tool_params"][tool] = {}
+                    if "location" not in plan["tool_params"][tool]:
+                        plan["tool_params"][tool]["location"] = location
+
+        # 도구 의존성 체이닝
+        for tool in list(plan["tool_list"]):
+            if tool in TOOL_DEPENDENCIES:
+                dep = TOOL_DEPENDENCIES[tool]
+                if dep.get("auto_chain"):
+                    for suggested in dep.get("suggests", []):
+                        if suggested not in plan["tool_list"]:
+                            plan["tool_list"].append(suggested)
+                            if TOOL_METADATA.get(suggested, {}).get("requires_location") and location:
+                                plan["tool_params"][suggested] = {"location": location}
+
+        logger.info(f"✅ [ANALYZER] 파싱 완료: tools={plan['need_tools']}, rag={plan['need_rag']}")
+        return plan
+
+    except Exception as e:
+        logger.warning(f"⚠️ [ANALYZER] 파싱 실패, 규칙 기반으로 전환: {e}")
+        return _rule_based_analysis(user_input, has_pdf)
 
 
 # =============================================================================
@@ -538,10 +527,9 @@ def synthesizer_node(state: QueryState) -> Dict[str, Any]:
 
     context = "\n".join(context_parts)
 
-    # LLM으로 최종 응답 생성
+    # LLM으로 최종 응답 생성 준비
     try:
-        client = _get_llm_client()
-
+        # 메시지 구성
         llm_messages = [
             {"role": "system", "content": SYNTHESIZER_SYSTEM_PROMPT},
             {"role": "user", "content": f"""다음 정보를 바탕으로 사용자 질문에 답변해주세요.
@@ -554,33 +542,17 @@ def synthesizer_node(state: QueryState) -> Dict[str, Any]:
 답변:"""}
         ]
 
-        response = client.generate_response(
-            messages=llm_messages,
-            temperature=0.4,
-            enable_thinking=reasoning_mode,
-            stream=False
-        )
-
-        if response and response.choices:
-            content = response.choices[0].message.content or ""
-            # thinking 태그 제거
-            final_response = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-        else:
-            final_response = f"정보 조회 결과:\n\n{context}"
-
-        logger.info("✅ [SYNTHESIZER] 응답 생성 완료")
+        logger.info("✅ [SYNTHESIZER] 응답 생성 준비 완료 (메인으로 위임)")
 
         return {
-            "final_response": final_response,
+            "final_messages": llm_messages,
+            "ready_to_generate": True,
             "next_node": "end",
-            "messages": messages + [
-                HumanMessage(content=user_input),
-                AIMessage(content=final_response)
-            ]
+            "messages": messages + [HumanMessage(content=user_input)]
         }
 
     except Exception as e:
-        logger.error(f"❌ [SYNTHESIZER] 응답 생성 실패: {e}")
+        logger.error(f"❌ [SYNTHESIZER] 응답 준비 실패: {e}")
         # Fallback: 원본 데이터 반환
         return {
             "final_response": f"정보 조회 결과:\n\n{context}\n\n(응답 생성 중 오류 발생: {e})",
@@ -605,8 +577,7 @@ def direct_response_node(state: QueryState) -> Dict[str, Any]:
     reasoning_mode = state.get("reasoning_mode", True)
 
     try:
-        client = _get_llm_client()
-
+        # 메시지 구성
         llm_messages = [
             {"role": "system", "content": SYSTEM_MESSAGE}
         ]
@@ -620,32 +591,17 @@ def direct_response_node(state: QueryState) -> Dict[str, Any]:
 
         llm_messages.append({"role": "user", "content": user_input})
 
-        response = client.generate_response(
-            messages=llm_messages,
-            temperature=0.6,
-            enable_thinking=reasoning_mode,
-            stream=False
-        )
-
-        if response and response.choices:
-            content = response.choices[0].message.content or ""
-            final_response = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL).strip()
-        else:
-            final_response = "죄송합니다. 응답을 생성하지 못했습니다."
-
-        logger.info("✅ [DIRECT_RESPONSE] 응답 생성 완료")
+        logger.info("✅ [DIRECT_RESPONSE] 응답 생성 준비 완료 (메인으로 위임)")
 
         return {
-            "final_response": final_response,
+            "final_messages": llm_messages,
+            "ready_to_generate": True,
             "next_node": "end",
-            "messages": messages + [
-                HumanMessage(content=user_input),
-                AIMessage(content=final_response)
-            ]
+            "messages": messages + [HumanMessage(content=user_input)]
         }
 
     except Exception as e:
-        logger.error(f"❌ [DIRECT_RESPONSE] 응답 생성 실패: {e}")
+        logger.error(f"❌ [DIRECT_RESPONSE] 응답 준비 실패: {e}")
         return {
             "final_response": f"오류가 발생했습니다: {str(e)}",
             "next_node": "end",

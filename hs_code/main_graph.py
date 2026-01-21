@@ -8,6 +8,7 @@ LangGraph의 graph.invoke() / graph.stream()을 사용합니다.
 
 import logging
 import uuid
+import re
 import gradio as gr
 from pathlib import Path
 from typing import Generator, Tuple, List, Dict, Any
@@ -15,12 +16,14 @@ from typing import Generator, Tuple, List, Dict, Any
 # 설정 및 내부 모듈 임포트
 from config import (
     PROJECT_NAME, VERSION, GRADIO_HOST, GRADIO_PORT, GRADIO_THEME,
-    PDF_FILES, ensure_directories, VLLM_SERVER_URL
+    PDF_FILES, ensure_directories, VLLM_SERVER_URL, VLLM_API_KEY, LLM_MODEL_NAME
 )
 from graph import build_graph, GraphState
 from graph.query_builder import build_query_graph
 from graph.query_state import QueryState
 from graph.nodes import _get_rag_system
+from graph.query_nodes import parse_analyzer_response
+from core.llm_client import ExaoneClient
 from utils.pdf_handler import PDFUtils, TempFileManager
 from services.ocr_service import OCRProcessor
 from langchain_core.messages import HumanMessage, AIMessage
@@ -42,6 +45,13 @@ class LangGraphGradioApp:
         # [LangGraph v2] Query Pipeline 그래프 빌드
         logger.info("🔨 Query Pipeline 그래프 초기화 중...")
         self.query_graph = build_query_graph()
+
+        # [LLM Client] 메인 루프 직접 호출용
+        self.llm_client = ExaoneClient(
+            server_url=VLLM_SERVER_URL,
+            api_key=VLLM_API_KEY,
+            model_name=LLM_MODEL_NAME
+        )
 
         # [Eyes] PDF/OCR 처리기
         self.pdf_utils = PDFUtils()
@@ -228,6 +238,10 @@ class LangGraphGradioApp:
         """
         Query Pipeline을 사용하여 메시지 처리 (개선된 파이프라인)
 
+        스트리밍 포인트:
+        1. Analyzer: 추론 과정 스트리밍 → thinking_content에 표시
+        2. Final Response: 최종 응답 스트리밍 → chatbot에 표시
+
         Args:
             user_message: 사용자 메시지
             history: 대화 히스토리
@@ -251,7 +265,7 @@ class LangGraphGradioApp:
                     messages.append(AIMessage(content=content))
 
         # QueryState 초기 상태 구성
-        initial_state: QueryState = {
+        current_state: QueryState = {
             "messages": messages,
             "user_input": user_message,
             "uploaded_pdf_content": uploaded_context if uploaded_context else None,
@@ -261,12 +275,16 @@ class LangGraphGradioApp:
             "execution_plan": None,
             "execution_result": None,
             "final_response": "",
+            "ready_to_analyze": False,
+            "analyzer_messages": [],
+            "ready_to_generate": False,
+            "final_messages": [],
             "next_node": "",
         }
 
         # 진행 중 표시
         history_with_input = (history or []) + [{"role": "user", "content": user_message}]
-        new_history = history_with_input + [{"role": "assistant", "content": "🔄 Query Pipeline 처리 중..."}]
+        new_history = history_with_input + [{"role": "assistant", "content": "🔄 분석 중..."}]
         yield new_history, "", ""
 
         try:
@@ -275,41 +293,177 @@ class LangGraphGradioApp:
             doc_info = ""
             thinking_content = ""
             final_response = ""
+            has_pdf = bool(uploaded_context)
 
             # Query Pipeline 스트리밍 실행
-            for event in self.query_graph.stream(initial_state):
+            for event in self.query_graph.stream(current_state):
                 for node_name, node_output in event.items():
                     logger.info(f"📍 [Query Pipeline] 노드 실행: {node_name}")
 
                     if not node_output:
                         continue
 
-                    # 실행 계획 정보 추출 (디버그용)
-                    if node_output.get("execution_plan"):
-                        plan = node_output["execution_plan"]
-                        plan_info = []
-                        if plan.get("need_tools"):
-                            plan_info.append(f"도구: {plan.get('tool_list', [])}")
-                        if plan.get("need_rag"):
-                            plan_info.append("RAG 검색")
-                        if plan.get("need_pdf"):
-                            plan_info.append("PDF 분석")
-                        if plan_info:
-                            thinking_content = f"**실행 계획:** {', '.join(plan_info)}\n**이유:** {plan.get('tool_reasoning', '')}"
+                    # ========================================
+                    # 1. ANALYZER 스트리밍 (추론 과정 표시)
+                    # ========================================
+                    if node_output.get("ready_to_analyze"):
+                        analyzer_messages = node_output.get("analyzer_messages", [])
+                        logger.info("🧠 [Analyzer] 추론 스트리밍 시작")
 
-                    # 실행 결과에서 문서 정보 추출
-                    if node_output.get("execution_result"):
-                        result = node_output["execution_result"]
-                        if result.get("rag_results"):
-                            rag_docs = result["rag_results"]
-                            doc_info = "**📚 검색된 매뉴얼:**\n"
-                            for doc in rag_docs[:3]:
-                                if isinstance(doc, dict) and "content" in doc:
-                                    doc_info += f"- {doc.get('source', 'unknown')}: {doc['content'][:200]}...\n"
+                        new_history[-1]['content'] = "🧠 질문 분석 중..."
+                        yield new_history, doc_info, "**🔍 분석 중...**"
 
-                    # 최종 응답 업데이트
+                        try:
+                            # Analyzer LLM 스트리밍 호출 (추론 모드 ON)
+                            stream = self.llm_client.generate_response(
+                                messages=analyzer_messages,
+                                enable_thinking=True,  # Analyzer는 항상 추론
+                                temperature=0.1,
+                                stream=True
+                            )
+
+                            if stream is None:
+                                raise Exception("LLM 응답 생성 실패")
+
+                            analyzer_response = ""
+                            current_thinking = ""
+                            in_thinking = False
+
+                            for chunk in stream:
+                                if chunk.choices and chunk.choices[0].delta.content:
+                                    content = chunk.choices[0].delta.content
+                                    analyzer_response += content
+
+                                    # <think> 태그 내용 추출하여 실시간 표시
+                                    if "<think>" in analyzer_response and not in_thinking:
+                                        in_thinking = True
+
+                                    if in_thinking:
+                                        # thinking 내용 추출
+                                        think_match = re.search(r'<think>(.*?)(?:</think>|$)', analyzer_response, re.DOTALL)
+                                        if think_match:
+                                            current_thinking = think_match.group(1).strip()
+                                            thinking_content = f"**🧠 분석 중:**\n{current_thinking}"
+                                            yield new_history, doc_info, thinking_content
+
+                                    if "</think>" in content:
+                                        in_thinking = False
+
+                            # Analyzer 응답 파싱 → ExecutionPlan 생성
+                            plan = parse_analyzer_response(analyzer_response, user_message, has_pdf)
+
+                            # 실행 계획 표시
+                            plan_info = []
+                            if plan.get("need_tools"):
+                                plan_info.append(f"🛠️ 도구: {plan.get('tool_list', [])}")
+                            if plan.get("need_rag"):
+                                plan_info.append("📚 매뉴얼 검색")
+                            if plan.get("need_pdf"):
+                                plan_info.append("📄 PDF 분석")
+
+                            if plan_info:
+                                thinking_content = f"**🧠 분석 완료:**\n{current_thinking}\n\n**📋 실행 계획:** {', '.join(plan_info)}\n**💡 이유:** {plan.get('tool_reasoning', '')}"
+                            else:
+                                thinking_content = f"**🧠 분석 완료:**\n{current_thinking}\n\n**📋 일반 대화로 응답**"
+
+                            yield new_history, doc_info, thinking_content
+
+                            # current_state 업데이트
+                            current_state["execution_plan"] = plan
+
+                            # 다음 단계 결정 및 실행
+                            if plan.get("need_tools") or plan.get("need_rag") or plan.get("need_pdf"):
+                                new_history[-1]['content'] = "🔧 정보 수집 중..."
+                                yield new_history, doc_info, thinking_content
+
+                                # Executor 노드 직접 호출
+                                from graph.query_nodes import tool_executor_node, rag_executor_node, pdf_executor_node
+
+                                current_state["execution_result"] = {}
+
+                                if plan.get("need_tools"):
+                                    logger.info("🛠️ [Main] 도구 실행 중...")
+                                    tool_result = tool_executor_node(current_state)
+                                    if tool_result.get("execution_result"):
+                                        current_state["execution_result"].update(tool_result["execution_result"])
+
+                                if plan.get("need_rag"):
+                                    logger.info("📚 [Main] RAG 검색 중...")
+                                    rag_result = rag_executor_node(current_state)
+                                    if rag_result.get("execution_result"):
+                                        current_state["execution_result"].update(rag_result["execution_result"])
+
+                                        # RAG 결과 표시
+                                        rag_docs = current_state["execution_result"].get("rag_results", [])
+                                        if rag_docs:
+                                            doc_info = "**📚 검색된 매뉴얼:**\n"
+                                            for doc in rag_docs[:3]:
+                                                if isinstance(doc, dict) and "content" in doc:
+                                                    doc_info += f"- {doc.get('source', 'unknown')}: {doc['content'][:200]}...\n"
+
+                                if plan.get("need_pdf"):
+                                    logger.info("📄 [Main] PDF 분석 중...")
+                                    pdf_result = pdf_executor_node(current_state)
+                                    if pdf_result.get("execution_result"):
+                                        current_state["execution_result"].update(pdf_result["execution_result"])
+
+                                # Synthesizer 호출하여 최종 메시지 준비
+                                from graph.query_nodes import synthesizer_node
+                                synth_result = synthesizer_node(current_state)
+                                final_messages = synth_result.get("final_messages", [])
+
+                            else:
+                                # Direct response
+                                from graph.query_nodes import direct_response_node
+                                direct_result = direct_response_node(current_state)
+                                final_messages = direct_result.get("final_messages", [])
+
+                            # ========================================
+                            # 2. 최종 응답 스트리밍
+                            # ========================================
+                            logger.info("🚀 [Main] 최종 응답 스트리밍 시작")
+                            new_history[-1]['content'] = ""
+                            yield new_history, doc_info, thinking_content
+
+                            stream = self.llm_client.generate_response(
+                                messages=final_messages,
+                                enable_thinking=reasoning_mode,
+                                stream=True
+                            )
+
+                            partial_response = ""
+                            for chunk in stream:
+                                if chunk.choices and chunk.choices[0].delta.content:
+                                    content = chunk.choices[0].delta.content
+                                    partial_response += content
+
+                                    # thinking 태그 제거하고 표시
+                                    display_response = re.sub(r'<think>.*?</think>', '', partial_response, flags=re.DOTALL).strip()
+                                    new_history[-1]['content'] = display_response
+                                    yield new_history, doc_info, thinking_content
+
+                            # 최종 응답 정리 (thinking 태그 제거)
+                            final_response = re.sub(r'<think>.*?</think>', '', partial_response, flags=re.DOTALL).strip()
+                            new_history[-1]['content'] = final_response
+                            logger.info("✅ [Main] 스트리밍 완료")
+
+                        except Exception as e:
+                            logger.error(f"❌ Analyzer/스트리밍 오류: {e}")
+                            import traceback
+                            traceback.print_exc()
+                            final_response = f"처리 중 오류가 발생했습니다: {e}"
+                            new_history[-1]['content'] = final_response
+
+                        yield new_history, doc_info, thinking_content
+                        return  # 스트리밍 완료 후 종료
+
+                    # ========================================
+                    # Fallback: 기존 방식 (직접 응답)
+                    # ========================================
                     if node_output.get("final_response"):
                         final_response = node_output["final_response"]
+                        # thinking 태그 제거
+                        final_response = re.sub(r'<think>.*?</think>', '', final_response, flags=re.DOTALL).strip()
                         new_history[-1]['content'] = final_response
                         yield new_history, doc_info, thinking_content
 
@@ -561,10 +715,12 @@ class LangGraphGradioApp:
         demo.queue(default_concurrency_limit=1, max_size=10)
         return demo
 
-    def launch(self, host: str = GRADIO_HOST, port: int = GRADIO_PORT, share: bool = False):
+    def launch(self, host: str = GRADIO_HOST, port: int = GRADIO_PORT, share: bool = True):
         """애플리케이션 실행"""
         demo = self.create_interface()
         logger.info(f"🚀 LangGraph Gradio 앱 실행: {host}:{port}")
+        if share:
+            print("🌐 외부 공개 URL 생성 중... (터미널에 링크가 표시됩니다)")
         demo.launch(server_name=host, server_port=port, share=share)
 
 
@@ -590,6 +746,16 @@ def print_startup_info():
 
 if __name__ == "__main__":
     import argparse
+    import signal
+    import sys
+
+    def signal_handler(sig, frame):
+        """Ctrl+C 시 강제 종료"""
+        print("\n🛑 종료 중...")
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
 
     parser = argparse.ArgumentParser(description=f'{PROJECT_NAME} {VERSION} (LangGraph)')
     parser.add_argument('--host', type=str, default=GRADIO_HOST, help='Host IP address')
