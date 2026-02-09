@@ -1,0 +1,31 @@
+# 환경변수 (API 키 포함)
+.env
+
+# 가상환경
+venv/
+venv_vllm/
+venv_app/
+hs_venv/
+.venv/
+
+# 캐시
+cache/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+
+# 임시 파일
+temp/
+*.tmp
+*.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db

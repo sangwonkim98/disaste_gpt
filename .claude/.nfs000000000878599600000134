@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(chmod:*)",
+      "Bash(source:*)",
+      "Bash(vllm:*)",
+      "Bash(vllm serve --help:*)",
+      "Bash(pip show:*)",
+      "Bash(grep:*)",
+      "Bash(nvidia-smi:*)",
+      "Bash(ls:*)"
+    ]
+  }
+}
